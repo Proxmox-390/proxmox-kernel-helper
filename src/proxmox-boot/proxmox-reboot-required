@@ -1,0 +1,19 @@
+#! /bin/sh
+set -e
+
+# Flag that a reboot is needed to boot the newly installed kernel, following the convention used by
+# update-notifier and unattended-upgrades, so that tools like update-notifier or monitoring checks
+# notice it. Reconfiguring the currently running kernel does not require a reboot.
+
+version="$1"
+
+[ -n "$version" ] || exit 0
+[ "$version" != "$(uname -r)" ] || exit 0
+[ -d /run ] || exit 0
+
+pkg="${DPKG_MAINTSCRIPT_PACKAGE:-proxmox-kernel-$version}"
+
+printf "*** System restart required ***\n" > /run/reboot-required
+if ! grep -qxF "$pkg" /run/reboot-required.pkgs 2>/dev/null; then
+	printf "%s\n" "$pkg" >> /run/reboot-required.pkgs
+fi

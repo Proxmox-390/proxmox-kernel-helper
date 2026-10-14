@@ -1,4 +1,5 @@
 KERNEL_HOOKSCRIPTS = proxmox-auto-removal zz-proxmox-boot
+KERNEL_POSTINST_HOOKSCRIPTS = proxmox-reboot-required
 INITRAMFS_HOOKSCRIPTS = proxmox-boot-sync
 SHARE_FILES = functions
 GRUB_CFG_SNIPPET = 000_proxmox_boot_header
@@ -17,6 +18,7 @@ all:
 install:
 	install -d $(POSTINSTHOOKDIR)
 	install -m 0755 $(KERNEL_HOOKSCRIPTS) $(POSTINSTHOOKDIR)
+	install -m 0755 $(KERNEL_POSTINST_HOOKSCRIPTS) $(POSTINSTHOOKDIR)
 	install -d $(POSTRMHOOKDIR)
 	install -m 0755 $(KERNEL_HOOKSCRIPTS) $(POSTRMHOOKDIR)
 	install -d $(POSTINITRAMFSHOOKDIR)
