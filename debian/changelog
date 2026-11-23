@@ -1,3 +1,13 @@
+proxmox-kernel-helper (9.2.2) trixie; urgency=medium
+
+  * kernel hooks: flag pending reboot after installing a new kernel using the
+    common `/run/reboot-required` mechanism, so that monitoring checks and
+    similar tools notice that the new kernel is not running yet. The flag is
+    only set once the boot loader configuration got updated, and not inside
+    containers or chroots, where the installed kernel is never booted.
+
+ -- Proxmox Support Team <support@proxmox.com>  Mon, 23 Nov 2026 13:21:38 +0100
+
 proxmox-kernel-helper (9.2.1) trixie; urgency=medium
 
   * proxmox-boot: fix UEFI setups whose ESPs use different boot loaders, for
