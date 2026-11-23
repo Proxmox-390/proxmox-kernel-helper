@@ -3,6 +3,9 @@
 # Flag that a reboot is needed to boot the newly installed kernel, following the convention used by
 # update-notifier and unattended-upgrades, so that tools like update-notifier or monitoring checks
 # notice it. Reconfiguring the currently running kernel does not require a reboot.
+#
+# Named to sort last, as the kernel packages stop at the first failing hook. This way the flag
+# is only set once the boot loader hooks succeeded.
 
 version="$1"
 

@@ -1,5 +1,5 @@
 KERNEL_HOOKSCRIPTS = proxmox-auto-removal zz-proxmox-boot
-KERNEL_POSTINST_HOOKSCRIPTS = proxmox-reboot-required
+KERNEL_POSTINST_HOOKSCRIPTS = zzz-proxmox-reboot-required
 INITRAMFS_HOOKSCRIPTS = proxmox-boot-sync
 SHARE_FILES = functions
 GRUB_CFG_SNIPPET = 000_proxmox_boot_header
