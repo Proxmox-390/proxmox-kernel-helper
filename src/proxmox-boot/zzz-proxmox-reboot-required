@@ -13,6 +13,16 @@ version="$1"
 [ "$version" != "$(uname -r)" ] || exit 0
 [ -d /run ] || exit 0
 
+# A container or chroot never boots the kernel installed in it, and uname reports the host's
+# kernel there.
+if ischroot; then
+	exit 0
+fi
+if command -V systemd-detect-virt >/dev/null 2>&1 &&
+	systemd-detect-virt --quiet --container; then
+	exit 0
+fi
+
 pkg="${DPKG_MAINTSCRIPT_PACKAGE:-proxmox-kernel-$version}"
 
 # Only a hint, so failing to write it must not fail the kernel installation.
