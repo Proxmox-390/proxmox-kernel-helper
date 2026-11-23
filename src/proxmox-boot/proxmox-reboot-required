@@ -1,5 +1,4 @@
 #! /bin/sh
-set -e
 
 # Flag that a reboot is needed to boot the newly installed kernel, following the convention used by
 # update-notifier and unattended-upgrades, so that tools like update-notifier or monitoring checks
@@ -13,7 +12,10 @@ version="$1"
 
 pkg="${DPKG_MAINTSCRIPT_PACKAGE:-proxmox-kernel-$version}"
 
+# Only a hint, so failing to write it must not fail the kernel installation.
 printf "*** System restart required ***\n" > /run/reboot-required
 if ! grep -qxF "$pkg" /run/reboot-required.pkgs 2>/dev/null; then
 	printf "%s\n" "$pkg" >> /run/reboot-required.pkgs
 fi
+
+exit 0
