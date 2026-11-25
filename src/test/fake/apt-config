@@ -1,0 +1,3 @@
+#!/bin/sh
+# test stand-in: point the helper at the fake dpkg
+echo "DPKG='$(dirname "$0")/dpkg'"

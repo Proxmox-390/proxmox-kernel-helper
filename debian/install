@@ -7,3 +7,4 @@ usr/lib/systemd/system/proxmox-boot-cleanup.service
 usr/sbin/grub-install
 usr/sbin/proxmox-boot-tool
 usr/share/proxmox-kernel-helper/scripts/functions
+usr/share/proxmox-kernel-helper/scripts/zipl-functions

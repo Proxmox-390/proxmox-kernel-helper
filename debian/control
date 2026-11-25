@@ -16,4 +16,4 @@ Replaces: proxmox-ve (<< 6.0-2~), pve-kernel-helper,
 Provides: pve-kernel-helper,
 Description: Function for various kernel maintenance tasks.
  This package includes kernel-hooks for marking certain kernels as
- NeverAutoRemove and helpers for systemd-boot
+ NeverAutoRemove and helpers for systemd-boot and, on IBM Z, zipl

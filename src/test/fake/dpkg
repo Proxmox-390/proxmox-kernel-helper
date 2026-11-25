@@ -1,0 +1,6 @@
+#!/bin/sh
+# test stand-in: 'dpkg -l' from the package list of the test root
+[ "$1" = "-l" ] || { echo "fake dpkg: unsupported argument $1" >&2; exit 2; }
+while read -r pkg; do
+	[ -n "$pkg" ] && printf 'ii  %-45s 1.0  s390x  test package\n' "$pkg"
+done < "$PBT_ROOT/packages"

@@ -3,6 +3,7 @@
 set -e
 
 . /usr/share/proxmox-kernel-helper/scripts/functions
+. /usr/share/proxmox-kernel-helper/scripts/zipl-functions
 
 _add_entry_to_list_file() {
 	file="$1"
@@ -304,6 +305,12 @@ clean() {
 refresh() {
 	hook=$1
 	hookscripts='proxmox-auto-removal zz-proxmox-boot'
+	if zipl_system; then
+		# no ESPs on IBM Z: the boot entries are in /etc/zipl.conf, and a refresh always
+		# writes the boot record again
+		hookscripts='proxmox-auto-removal zy-proxmox-zipl'
+		export ZIPL_ALWAYS_RUN=1
+	fi
 
 	if [ -n "$hook" ]; then
 	    if echo "$hookscripts" | grep -sqE "(^|[[:space:]]+)$hook([[:space:]]+|$)"; then
@@ -315,7 +322,7 @@ refresh() {
 	fi
 
 	for script in $hookscripts; do
-		scriptpath="/etc/kernel/postinst.d/$script"
+		scriptpath="${PBT_HOOK_DIR:-/etc/kernel/postinst.d}/$script"
 		if [ -f "$scriptpath" ] && [ -x "$scriptpath" ]; then
 			echo "Running hook script '$script'.."
 			$scriptpath
@@ -389,6 +396,10 @@ list_kernels() {
 		echo "Kernel pinned on next-boot:"
 		echo "${nextboot_kernel}"
 	fi
+	if zipl_system; then
+		echo ""
+		zipl_list_entries
+	fi
 }
 
 usage() {
@@ -446,6 +457,7 @@ help() {
 	echo "USAGE: $0 refresh [--hook <name>]"
 	echo ""
 	echo "    refresh all configured EFI system partitions. Use --hook to only run the specified hook, omit to run all."
+	echo "    On IBM Z (s390x) it rewrites the boot entries for the Proxmox kernels in /etc/zipl.conf and runs zipl."
 	echo ""
 	echo "USAGE: $0 kernel <add|remove> <kernel-version>"
 	echo ""
@@ -457,6 +469,8 @@ help() {
 	echo "    pin proxmox-kernel with ABI <kernel-version> as the default entry to be booted."
 	echo "    with --next-boot sets <kernel-version> only for the next boot."
 	echo "    NOTE: you need to manually run 'refresh' once you're finished with pinning kernels"
+	echo "    On IBM Z (s390x) the pin takes effect at once. With --next-boot the default entry stays as it is"
+	echo "    where the re-IPL setting can select a boot menu entry for one reboot."
 	echo ""
 	echo "USAGE: $0 kernel unpin [--next-boot]"
 	echo ""
@@ -516,6 +530,11 @@ _status_detail() {
 
 status() {
 	quiet="$1"
+	if [ ! -e "${ESP_LIST}" ] && [ -z "$quiet" ] && zipl_system; then
+		echo "System boots through zipl, no ESPs to keep in sync."
+		zipl_list_entries
+		exit 0
+	fi
 	if [ ! -e "${ESP_LIST}" ]; then
 		if [ -z "$quiet" ]; then
 		    warn "E: $ESP_LIST does not exist."
@@ -566,7 +585,7 @@ pin_kernel() {
 	    pin_file="$PINNED_KERNEL_CONF"
 	fi
 
-	if [ ! -e "/boot/vmlinuz-$ver" ]; then
+	if [ ! -e "${PBT_ROOT}/boot/vmlinuz-$ver" ]; then
 		boot_kernels="$(boot_kernel_list)"
 		warn "E: no kernel image found in /boot for '$ver', not setting default."
 		warn ""
@@ -575,6 +594,7 @@ pin_kernel() {
 		exit 1
 	fi
 
+	old_pin=""
 	if [ -e "$pin_file" ]; then
 		old_pin=$(get_first_line "${pin_file}")
 		if [ "$ver" != "$old_pin" ]; then
@@ -582,6 +602,27 @@ pin_kernel() {
 		fi
 	fi
 	echo "$ver" > "$pin_file"
+
+	if zipl_system; then
+		# the boot entries are written at once; a pin that could not be put into effect
+		# is taken back
+		rc=0
+		if [ "$pin_file" = "$NEXT_BOOT_PIN" ]; then
+			zipl_pin_next_boot || rc=$?
+		else
+			ZIPL_ALWAYS_RUN=1 zipl_refresh || rc=$?
+		fi
+		if [ "$rc" -ne 0 ]; then
+			if [ -n "$old_pin" ]; then
+				echo "$old_pin" > "$pin_file"
+			else
+				rm -f "$pin_file"
+			fi
+			warn "E: could not make '$ver' the kernel to boot, pin not set."
+			exit 1
+		fi
+		return
+	fi
 
 	if [ -f "${ESP_LIST}" ]; then
 		_ask_interactive_refresh "Set kernel '$ver' in $pin_file"
@@ -603,6 +644,12 @@ unpin_kernel() {
 		last_pin=${old_pin:-$last_pin}
 		rm -f "$PINNED_KERNEL_CONF"
 		echo "Removed $PINNED_KERNEL_CONF."
+	fi
+
+	if zipl_system; then
+		zipl_clear_next_boot
+		ZIPL_ALWAYS_RUN=1 zipl_refresh || exit 1
+		return
 	fi
 
 	if [ -f "${ESP_LIST}" ]; then

@@ -7,5 +7,10 @@ set -e
 # this variable will be set to 1 and we do nothing, since our proxmox-kernel
 # hooks will update the ESPs all at once anyway.
 if [ -z "$INITRAMFS_TOOLS_KERNEL_HOOK" ]; then
-	/usr/sbin/proxmox-boot-tool refresh --hook 'zz-proxmox-boot'
+	if [ "$(uname -m)" = "s390x" ]; then
+		# a new initramfs may have to be added to the kernel's zipl boot entry
+		/usr/sbin/proxmox-boot-tool refresh --hook 'zy-proxmox-zipl'
+	else
+		/usr/sbin/proxmox-boot-tool refresh --hook 'zz-proxmox-boot'
+	fi
 fi

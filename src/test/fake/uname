@@ -1,0 +1,7 @@
+#!/bin/sh
+# test stand-in: an s390x machine running $FAKE_RUNNING
+case "$1" in
+	-m) echo s390x ;;
+	-r) echo "$FAKE_RUNNING" ;;
+	*) echo "fake uname: unsupported argument $1" >&2; exit 2 ;;
+esac

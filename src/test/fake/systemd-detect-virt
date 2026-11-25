@@ -1,0 +1,3 @@
+#!/bin/sh
+# test stand-in: not a container
+exit 1

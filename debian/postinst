@@ -14,6 +14,10 @@ case "$1" in
         fi
 
         proxmox-boot-tool reinit || true
+        if [ "$(uname -m)" = "s390x" ] && [ -e /etc/zipl.conf ]; then
+            # boot entries for Proxmox kernels that were installed before this version
+            proxmox-boot-tool refresh --hook zy-proxmox-zipl || true
+        fi
     ;;
 
     triggered)

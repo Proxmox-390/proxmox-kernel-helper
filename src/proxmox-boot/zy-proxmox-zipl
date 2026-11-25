@@ -1,0 +1,38 @@
+#! /bin/sh
+
+set -e
+
+# Kernel hook for systems that boot through zipl (IBM Z, s390x): keep the boot entries for the
+# Proxmox kernels in /etc/zipl.conf and the boot record up to date when a kernel is installed or
+# removed, see /usr/share/proxmox-kernel-helper/scripts/zipl-functions.
+#
+# Named to run after the initramfs has been generated and before the zz-zipl hook of s390-tools,
+# which runs plain zipl and would fail on a configuration that still names a removed kernel.
+
+if command -V systemd-detect-virt >/dev/null 2>&1 &&
+	systemd-detect-virt --quiet --container; then
+	exit 0
+fi
+
+. /usr/share/proxmox-kernel-helper/scripts/functions
+. /usr/share/proxmox-kernel-helper/scripts/zipl-functions
+
+zipl_system || exit 0
+
+rc=0
+zipl_refresh "$1" || rc=$?
+
+case "$rc" in
+	0)
+		;;
+	1)
+		# the previous configuration is in place and bootable, do not fail the package operation
+		warn "proxmox-boot-tool: the zipl boot entries were NOT updated, the system boots as before."
+		warn "proxmox-boot-tool: fix the problem reported above and run 'proxmox-boot-tool refresh'."
+		;;
+	*)
+		exit 1
+		;;
+esac
+
+exit 0

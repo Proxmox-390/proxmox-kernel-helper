@@ -1,0 +1,75 @@
+#!/bin/sh
+# Stand-in for zipl in the test suite. It reads the configuration like zipl does as far as the
+# tests need it: every IPL section must have an existing image (and ramdisk, if named) unless it
+# is optional, section names must be unique, the default must exist. It prints the menu lines of
+# 'zipl -V' and writes no boot record; a real run copies the configuration to
+# $PBT_ROOT/bootrecord instead, so that tests can see which configuration is "on disk".
+#
+#   FAKE_ZIPL_REJECT=1      fail every run with --dry-run
+#   FAKE_ZIPL_FAIL=<n>      fail the next <n> real runs (counter in $PBT_ROOT/zipl.fail)
+conf="$PBT_ROOT/etc/zipl.conf"
+dry=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--dry-run) dry=1 ;;
+		-c|--config) conf="$2"; shift ;;
+		-V) ;;
+		*) echo "fake zipl: unknown argument $1" >&2; exit 2 ;;
+	esac
+	shift
+done
+echo "zipl${dry:+ --dry-run} $conf" >> "$PBT_ROOT/zipl.calls"
+
+if [ -n "$dry" ] && [ -n "$FAKE_ZIPL_REJECT" ]; then
+	echo "Error: fake zipl rejects the configuration" >&2
+	exit 1
+fi
+if [ -z "$dry" ] && [ -f "$PBT_ROOT/zipl.fail" ]; then
+	n=$(cat "$PBT_ROOT/zipl.fail")
+	if [ "$n" -gt 0 ]; then
+		echo $((n - 1)) > "$PBT_ROOT/zipl.fail"
+		echo "Error: fake zipl could not write the boot record" >&2
+		exit 1
+	fi
+fi
+
+echo "Using config file '$conf'"
+echo "Building bootmap in '/boot'"
+echo "Building menu 'zipl-automatic-menu'"
+awk -v root="$PBT_ROOT" '
+	function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+	function exists(f) { return (system("test -e \"" root f "\"") == 0) }
+	function flush(   miss) {
+		if (name == "" || name == "defaultboot") return
+		if (name in seen) { print "Error: section " name " defined twice" > "/dev/stderr"; bad = 1 }
+		seen[name] = 1
+		miss = (image == "" || !exists(image) || (ramdisk != "" && !exists(ramdisk)))
+		if (miss && optional) { num++; print "Skipping #" num ": IPL section \x27" name "\x27 (missing files)"; return }
+		if (miss) { print "Error: section " name ": image or ramdisk missing" > "/dev/stderr"; bad = 1; return }
+		num++
+		print "Adding #" num ": IPL section \x27" name "\x27" (name == def ? " (default)" : "")
+		added[name] = 1
+	}
+	/^[ \t]*#/ || /^[ \t]*$/ { next }
+	/^[ \t]*[\[:]/ {
+		flush()
+		name = $0; sub(/^[ \t]*[\[:]/, "", name); sub(/\].*$/, "", name)
+		image = ""; ramdisk = ""; optional = 0
+		next
+	}
+	{
+		k = trim(substr($0, 1, index($0, "=") - 1)); v = trim(substr($0, index($0, "=") + 1))
+		if (name == "defaultboot" && k == "default") def = v
+		if (k == "image") image = v
+		if (k == "ramdisk") ramdisk = v
+		if (k == "optional") optional = (v == "1")
+	}
+	END {
+		flush()
+		if (def != "" && !(def in added)) { print "Error: default section " def " not usable" > "/dev/stderr"; bad = 1 }
+		exit bad
+	}' "$conf" || exit 1
+if [ -z "$dry" ]; then
+	cp "$conf" "$PBT_ROOT/bootrecord"
+fi
+echo "Done."

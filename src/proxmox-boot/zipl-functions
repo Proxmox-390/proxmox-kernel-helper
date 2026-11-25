@@ -1,0 +1,368 @@
+#! /bin/sh
+# zipl boot entries for Proxmox kernels on IBM Z (s390x); sourced after 'functions'.
+#
+# On s390x the boot record is written by zipl from /etc/zipl.conf, there is no ESP and no GRUB.
+# proxmox-boot-tool manages one block of IPL sections at the end of that file, one section per
+# kernel it keeps bootable (see boot_kernel_list), and the 'default=' setting of [defaultboot]:
+#
+#   - the default is the pinned kernel, else the newest installed Proxmox kernel
+#   - the running kernel comes right after the default, the others follow newest first
+#   - everything outside the block stays as it is, so the sections the installer or the
+#     administrator wrote (typically [debian] and [old], booting /boot/vmlinuz and
+#     /boot/vmlinuz.old) keep their menu numbers and keep working for Debian kernels
+#   - parameters, target and any other setting of the managed sections are copied from the section
+#     that was the default when the block was first written; edit them there and run
+#     'proxmox-boot-tool refresh'
+#   - without an installed Proxmox kernel and without a pin, the block is removed again and the
+#     original default restored
+#
+# A new configuration is only put in place after 'zipl --dry-run' accepted it. If the real zipl run
+# fails afterwards, the previous configuration is restored and zipl is run again.
+#
+# A kernel pinned for the next boot only is not made the default where the machine has a re-IPL
+# boot selector (loadparm or bootprog below /sys/firmware/reipl): its menu number is set there,
+# the next reboot uses it once, and a load from the HMC or hypervisor boots the default again.
+# Without such a selector (for example a guest booted from a virtio-scsi disk) the kernel becomes
+# the default until proxmox-boot-cleanup.service removes the pin during the next boot, as on the
+# other architectures.
+
+# prefix for all files, set by the test suite only
+PBT_ROOT="${PBT_ROOT:-}"
+ZIPL="${ZIPL:-zipl}"
+ZIPL_CONF="${PBT_ROOT}/etc/zipl.conf"
+ZIPL_BOOT_DIR="${PBT_ROOT}/boot"
+ZIPL_BLS_DIR="${PBT_ROOT}/boot/loader/entries"
+ZIPL_REIPL_DIR="${PBT_ROOT}/sys/firmware/reipl"
+ZIPL_BEGIN="# BEGIN proxmox-boot-tool managed boot entries"
+ZIPL_END="# END proxmox-boot-tool managed boot entries"
+ZIPL_SECTION_PREFIX="proxmox-"
+# present while the pin for the next boot is carried by the re-IPL boot selector
+ZIPL_NEXT_BOOT_REIPL="${PBT_ROOT}/etc/kernel/next-boot-pin.reipl"
+if [ -n "$PBT_ROOT" ]; then
+	MANUAL_KERNEL_LIST="${PBT_ROOT}${MANUAL_KERNEL_LIST}"
+	PINNED_KERNEL_CONF="${PBT_ROOT}${PINNED_KERNEL_CONF}"
+	NEXT_BOOT_PIN="${PBT_ROOT}${NEXT_BOOT_PIN}"
+fi
+
+zipl_system() {
+	[ "$(uname -m)" = "s390x" ] && [ -f "$ZIPL_CONF" ]
+}
+
+# the configuration without the managed block and without trailing empty lines
+_zipl_user_conf() {
+	awk -v b="$ZIPL_BEGIN" -v e="$ZIPL_END" '
+		index($0, b) == 1 { skip = 1; next }
+		index($0, e) == 1 { skip = 0; next }
+		!skip { lines[++n] = $0 }
+		END {
+			while (n > 0 && lines[n] ~ /^[ \t]*$/) n--
+			for (i = 1; i <= n; i++) print lines[i]
+		}' "$1"
+}
+
+# value of a [defaultboot] setting
+_zipl_defaultboot_get() {
+	awk -v key="$2" '
+		{ h = $0; sub(/[ \t]+$/, "", h) }
+		h == "[defaultboot]" { s = 1; next }
+		/^[ \t]*[\[:]/ { s = 0 }
+		s && $0 ~ "^[ \t]*" key "[ \t]*(=|$)" {
+			v = $0; if (v !~ /=/) { print "1"; exit }
+			sub(/^[^=]*=[ \t]*/, "", v); sub(/[ \t]+$/, "", v); print v; exit
+		}' "$1"
+}
+
+# set default=<section> in [defaultboot], keeping the spelling of an existing line
+_zipl_set_default() {
+	awk -v d="$2" '
+		{ h = $0; sub(/[ \t]+$/, "", h) }
+		h == "[defaultboot]" { print; s = 1; pending = 1; next }
+		/^[ \t]*[\[:]/ { if (s && pending) { print "default=" d; pending = 0 }; s = 0 }
+		s && /^[ \t]*default[ \t]*=/ {
+			match($0, /^[ \t]*default[ \t]*=[ \t]*/)
+			print substr($0, 1, RLENGTH) d; pending = 0; next
+		}
+		{ print }
+		END { if (s && pending) print "default=" d }' "$1"
+}
+
+_zipl_has_section() {
+	awk -v n="[$2]" '{ h = $0; sub(/[ \t]+$/, "", h) } h == n { found = 1 } END { exit !found }' "$1"
+}
+
+# name of the first IPL section that has an image
+_zipl_first_ipl_section() {
+	awk '
+		/^[ \t]*\[/ { name = $0; sub(/^[ \t]*\[/, "", name); sub(/\].*$/, "", name); next }
+		/^[ \t]*:/ { name = "" }
+		name != "" && name != "defaultboot" && /^[ \t]*image[ \t]*=/ { print name; exit }' "$1"
+}
+
+# settings of a section that the managed sections take over: all but the kernel specific ones
+_zipl_reference_lines() {
+	awk -v n="[$2]" '
+		{ h = $0; sub(/[ \t]+$/, "", h) }
+		h == n { s = 1; next }
+		/^[ \t]*[\[:]/ { s = 0 }
+		s && !/^[ \t]*(#|$)/ {
+			k = $0; sub(/[ \t]*=.*$/, "", k); sub(/^[ \t]+/, "", k)
+			if (k != "image" && k != "ramdisk" && k != "optional") print
+		}' "$1"
+}
+
+# the section that was the default before the block was written
+_zipl_original_default() {
+	orig="$(sed -n "s/^${ZIPL_BEGIN} (original default: \(.*\))\$/\1/p" "$1" | head -n1)"
+	if [ -z "$orig" ]; then
+		orig="$(_zipl_defaultboot_get "$1" default)"
+	fi
+	echo "$orig"
+}
+
+# why the configuration can not be managed, empty if it can
+_zipl_unsupported() {
+	conf="$1"
+	if [ -n "$(ls -A "$ZIPL_BLS_DIR" 2>/dev/null)" ]; then
+		echo "boot loader specification entries in /boot/loader/entries are in use"
+	elif ! _zipl_has_section "$conf" defaultboot; then
+		echo "it has no [defaultboot] section"
+	elif [ -n "$(_zipl_defaultboot_get "$conf" defaultmenu)" ]; then
+		echo "it uses a hand-written menu (defaultmenu)"
+	elif [ -z "$(_zipl_first_ipl_section "$conf")" ]; then
+		echo "it has no IPL section with an image"
+	fi
+}
+
+_zipl_image_exists() {
+	[ -e "${ZIPL_BOOT_DIR}/vmlinuz-$1" ]
+}
+
+# The kernel versions that get a managed section. The first line is the version to boot by default
+# and may be empty; the menu order follows. Prints nothing if there is nothing to manage: no
+# Proxmox kernel installed and nothing pinned.
+_zipl_kernel_order() {
+	running="$(uname -r)"
+	pinned="$(get_first_line "$PINNED_KERNEL_CONF")"
+	nextboot="$(get_first_line "$NEXT_BOOT_PIN")"
+
+	all="$(
+		{ boot_kernel_list "$@"; echo "$running"; } | sort -u | while IFS= read -r v; do
+			if [ -n "$v" ] && _zipl_image_exists "$v"; then echo "$v"; fi
+		done | sort --version-sort --reverse
+	)"
+
+	default=""
+	if [ -n "$nextboot" ] && [ ! -e "$ZIPL_NEXT_BOOT_REIPL" ] && _zipl_image_exists "$nextboot"; then
+		default="$nextboot"
+	elif [ -n "$pinned" ] && _zipl_image_exists "$pinned"; then
+		default="$pinned"
+	else
+		default="$(echo "$all" | grep -E -- '-pve$' | head -n1)"
+	fi
+	if [ -z "$default" ]; then
+		# only a pin for the next boot can make a section necessary then
+		if [ -z "$nextboot" ] || ! _zipl_image_exists "$nextboot"; then
+			return 0
+		fi
+	fi
+
+	echo "$default"
+	{
+		echo "$default"
+		if [ "$running" != "$default" ] && _zipl_image_exists "$running"; then echo "$running"; fi
+		echo "$all"
+	} | awk 'NF && !seen[$0]++'
+}
+
+# the complete new configuration on stdout
+_zipl_generate() {
+	conf="$1"; shift
+	orig="$(_zipl_original_default "$conf")"
+	user="$(mktemp "${ZIPL_CONF}.pbt-user.XXXXXX")"
+	_zipl_user_conf "$conf" > "$user"
+
+	ref="$orig"
+	if [ -z "$ref" ] || ! _zipl_has_section "$user" "$ref" ||
+	   [ "${ref#"$ZIPL_SECTION_PREFIX"}" != "$ref" ]; then
+		ref="$(_zipl_first_ipl_section "$user")"
+		orig="$ref"
+	fi
+
+	order="$(_zipl_kernel_order "$@")"
+	default_ver="$(echo "$order" | head -n1)"
+	order="$(echo "$order" | tail -n +2)"
+
+	if [ -z "$order" ]; then
+		# nothing to manage: the plain configuration with its original default
+		_zipl_set_default "$user" "$orig"
+		rm -f "$user"
+		return 0
+	fi
+
+	if [ -n "$default_ver" ]; then
+		_zipl_set_default "$user" "${ZIPL_SECTION_PREFIX}${default_ver}"
+	else
+		_zipl_set_default "$user" "$orig"
+	fi
+	echo ""
+	echo "${ZIPL_BEGIN} (original default: ${orig})"
+	echo "# Do not edit this block, it is rewritten on every kernel installation and removal."
+	echo "# The settings of its sections are copied from [${ref}]: change them there and run"
+	echo "# 'proxmox-boot-tool refresh'. 'proxmox-boot-tool kernel pin' selects another default."
+	echo "$order" | while IFS= read -r v; do
+		echo "[${ZIPL_SECTION_PREFIX}${v}]"
+		_zipl_reference_lines "$user" "$ref"
+		echo "image=/boot/vmlinuz-${v}"
+		if [ -e "${ZIPL_BOOT_DIR}/initrd.img-${v}" ]; then
+			echo "ramdisk=/boot/initrd.img-${v}"
+		fi
+		echo ""
+	done
+	echo "${ZIPL_END}"
+	rm -f "$user"
+}
+
+# Bring /etc/zipl.conf and the boot record up to date. Arguments are passed on to
+# boot_kernel_list (the version a kernel hook was called for).
+#   0  done, or nothing to do, or the configuration is not managed
+#   1  failed, the previous configuration is in place and its boot record was written again
+#   2  failed, and writing the boot record for the previous configuration failed as well
+zipl_refresh() {
+	reason="$(_zipl_unsupported "$ZIPL_CONF")"
+	if [ -n "$reason" ]; then
+		warn "proxmox-boot-tool: not managing $ZIPL_CONF, $reason."
+		return 0
+	fi
+
+	# a configuration that was never managed stays untouched while there is nothing to manage
+	if ! grep -qF "$ZIPL_BEGIN" "$ZIPL_CONF" && [ -z "$(_zipl_kernel_order "$@")" ]; then
+		return 0
+	fi
+
+	new="$(mktemp "${ZIPL_CONF}.pbt-new.XXXXXX")"
+	# keep owner and mode of the configuration
+	cp -p "$ZIPL_CONF" "$new"
+	if ! _zipl_generate "$ZIPL_CONF" "$@" > "$new"; then
+		rm -f "$new"
+		warn "proxmox-boot-tool: could not generate the zipl configuration, $ZIPL_CONF left as it is."
+		return 1
+	fi
+
+	if cmp -s "$new" "$ZIPL_CONF"; then
+		rm -f "$new"
+		if [ -n "$ZIPL_ALWAYS_RUN" ]; then
+			echo "Running zipl, $ZIPL_CONF is up to date."
+			if ! $ZIPL > "${ZIPL_CONF}.pbt-log" 2>&1; then
+				cat "${ZIPL_CONF}.pbt-log" >&2
+				rm -f "${ZIPL_CONF}.pbt-log"
+				warn "proxmox-boot-tool: zipl failed, see above."
+				return 2
+			fi
+			rm -f "${ZIPL_CONF}.pbt-log"
+		fi
+		return 0
+	fi
+
+	if ! $ZIPL --dry-run -c "$new" > "${ZIPL_CONF}.pbt-log" 2>&1; then
+		cat "${ZIPL_CONF}.pbt-log" >&2
+		rm -f "$new" "${ZIPL_CONF}.pbt-log"
+		warn "proxmox-boot-tool: zipl does not accept the new configuration (see above), $ZIPL_CONF left as it is."
+		return 1
+	fi
+
+	cp -p "$ZIPL_CONF" "${ZIPL_CONF}.pbt-bak"
+	mv "$new" "$ZIPL_CONF"
+	echo "Updated $ZIPL_CONF (previous version: ${ZIPL_CONF}.pbt-bak), default boot entry: $(_zipl_defaultboot_get "$ZIPL_CONF" default)"
+	echo "Running zipl.."
+	if $ZIPL > "${ZIPL_CONF}.pbt-log" 2>&1; then
+		rm -f "${ZIPL_CONF}.pbt-log"
+		return 0
+	fi
+
+	cat "${ZIPL_CONF}.pbt-log" >&2
+	warn "proxmox-boot-tool: zipl failed (see above), restoring the previous $ZIPL_CONF."
+	cp -p "${ZIPL_CONF}.pbt-bak" "$ZIPL_CONF"
+	if $ZIPL > "${ZIPL_CONF}.pbt-log" 2>&1; then
+		rm -f "${ZIPL_CONF}.pbt-log"
+		warn "proxmox-boot-tool: previous configuration restored and its boot record written."
+		return 1
+	fi
+	cat "${ZIPL_CONF}.pbt-log" >&2
+	rm -f "${ZIPL_CONF}.pbt-log"
+	warn "proxmox-boot-tool: zipl failed for the previous configuration as well, THE SYSTEM MAY NOT BOOT."
+	warn "proxmox-boot-tool: check $ZIPL_CONF and run 'zipl' before the next reboot."
+	return 2
+}
+
+# number of a section in the boot menu zipl builds, empty if there is no menu
+_zipl_menu_number() {
+	$ZIPL --dry-run -V 2>/dev/null | awk -v n="'$1'" '
+		$1 == "Adding" && $2 ~ /^#[0-9]+:$/ {
+			for (i = 3; i <= NF; i++) if ($i == n) { num = $2; gsub(/[#:]/, "", num); print num; exit }
+		}'
+}
+
+# the re-IPL attribute that selects a boot menu entry, empty if this machine has none
+_zipl_reipl_selector() {
+	type="$(cat "${ZIPL_REIPL_DIR}/reipl_type" 2>/dev/null || true)"
+	case "$type" in
+		ccw)
+			attr="${ZIPL_REIPL_DIR}/ccw/loadparm" ;;
+		fcp|nvme|eckd)
+			attr="${ZIPL_REIPL_DIR}/${type}/bootprog" ;;
+		*)
+			return 0 ;;
+	esac
+	if [ -w "$attr" ]; then echo "$attr"; fi
+}
+
+# Boot the kernel in $NEXT_BOOT_PIN once. Tries the re-IPL boot selector first, which leaves the
+# default alone; otherwise the kernel becomes the default until the pin is removed again.
+zipl_pin_next_boot() {
+	ver="$(get_first_line "$NEXT_BOOT_PIN")"
+	rm -f "$ZIPL_NEXT_BOOT_REIPL"
+	attr="$(_zipl_reipl_selector)"
+	if [ -n "$attr" ]; then
+		# with the flag the kernel gets a boot entry without becoming the default
+		: > "$ZIPL_NEXT_BOOT_REIPL"
+		ZIPL_ALWAYS_RUN=1 zipl_refresh || { rm -f "$ZIPL_NEXT_BOOT_REIPL"; return 1; }
+		num="$(_zipl_menu_number "${ZIPL_SECTION_PREFIX}${ver}")"
+		if [ -n "$num" ] && echo "$num" > "$attr"; then
+			echo "Boot menu entry $num ('$ver') is selected for the next reboot through the re-IPL setting"
+			echo "${attr#"$PBT_ROOT"}. The default entry is unchanged: a load from the HMC or the hypervisor"
+			echo "instead of a reboot boots it."
+			return 0
+		fi
+		rm -f "$ZIPL_NEXT_BOOT_REIPL"
+		warn "Could not select a boot menu entry for '$ver' through the re-IPL setting."
+	fi
+	echo "This machine has no usable re-IPL boot selector: '$ver' becomes the default boot entry until"
+	echo "the next boot has removed the pin again (proxmox-boot-cleanup.service)."
+	ZIPL_ALWAYS_RUN=1 zipl_refresh
+}
+
+# back to the default entry for the following re-IPLs
+zipl_clear_next_boot() {
+	[ -e "$ZIPL_NEXT_BOOT_REIPL" ] || return 0
+	rm -f "$ZIPL_NEXT_BOOT_REIPL"
+	type="$(cat "${ZIPL_REIPL_DIR}/reipl_type" 2>/dev/null || true)"
+	case "$type" in
+		ccw)
+			echo "" > "${ZIPL_REIPL_DIR}/ccw/loadparm" 2>/dev/null || true ;;
+		fcp|nvme|eckd)
+			echo 0 > "${ZIPL_REIPL_DIR}/${type}/bootprog" 2>/dev/null || true ;;
+	esac
+}
+
+# boot entries as configured, for 'kernel list'
+zipl_list_entries() {
+	default="$(_zipl_defaultboot_get "$ZIPL_CONF" default)"
+	echo "zipl boot entries in $ZIPL_CONF (default: ${default:-none}):"
+	awk -v d="$default" -v p="$ZIPL_SECTION_PREFIX" '
+		/^[ \t]*\[/ {
+			name = $0; sub(/^[ \t]*\[/, "", name); sub(/\].*$/, "", name)
+			if (name == "defaultboot") next
+			kind = (index(name, p) == 1) ? "managed" : "manual"
+			printf "%s%s (%s)\n", name, (name == d) ? " *" : "", kind
+		}' "$ZIPL_CONF"
+}
