@@ -1,3 +1,12 @@
+proxmox-kernel-helper (9.2.2+s390x1) trixie; urgency=medium
+
+  * s390x port: add a zipl backend. The kernel hooks and proxmox-boot-
+    tool keep boot entries for the installed Proxmox kernels in
+    /etc/zipl.conf and run zipl; 'kernel pin', 'unpin' and 'list' work
+    on IBM Z.
+
+ -- Yvan Janssens <yvanj@cyber.gent>  Wed, 25 Nov 2026 13:55:29 +0100
+
 proxmox-kernel-helper (9.2.2) trixie; urgency=medium
 
   * kernel hooks: flag pending reboot after installing a new kernel using the

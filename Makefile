@@ -13,10 +13,11 @@ $(BUILDDIR): debian src
 	rm -rf $@ $@.tmp
 	cp -a src $@.tmp
 	cp -a debian $@.tmp/
-	echo "git clone git://git.proxmox.com/git/proxmox-kernel-helper.git\\ngit checkout $$(git rev-parse HEAD)" > $@.tmp/debian/SOURCE
+	echo "git clone https://github.com/Proxmox-390/proxmox-kernel-helper.git\\ngit checkout $$(git rev-parse HEAD)" > $@.tmp/debian/SOURCE
 	mv $@.tmp $@
 
 $(DEB): $(BUILDDIR)
+	$(MAKE) -C src check
 	cd $(BUILDDIR); dpkg-buildpackage -b -uc -us
 	lintian $(DEB)
 
