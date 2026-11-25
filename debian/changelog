@@ -1,3 +1,10 @@
+proxmox-kernel-helper (9.2.2+s390x2) trixie; urgency=medium
+
+  * zipl backend: tests for systems where a hand-written section for a
+    Proxmox kernel is the default. No change to the installed files.
+
+ -- Yvan Janssens <yvanj@cyber.gent>  Wed, 25 Nov 2026 15:51:55 +0100
+
 proxmox-kernel-helper (9.2.2+s390x1) trixie; urgency=medium
 
   * s390x port: add a zipl backend. The kernel hooks and proxmox-boot-

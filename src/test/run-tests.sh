@@ -279,6 +279,48 @@ expect_user_part_kept
 expect_bootable
 expect "menu number of the hand-added entry" "Adding #3: IPL section 'pve73'" "$(zipl --dry-run | grep "'pve73'")"
 
+begin "a hand-written section for a Proxmox kernel is the default: upgrade, clean-up, removal" hand-default.conf
+# a system that got a Proxmox kernel before the helper knew zipl: image installed, section and
+# default written by hand, running that kernel
+add_image "$P2"
+echo "proxmox-kernel-$P2" >> "$PBT_ROOT/packages"
+FAKE_RUNNING="$P2"
+install_kernel "$P3"
+expect_rc 0 "$hook_rc"
+expect "default" "proxmox-$P3" "$(default)"
+expect "managed entries" "$P3 $P2" "$(managed)"
+grep -q '^\[pve73\]$' "$PBT_ROOT/etc/zipl.conf" || fail "hand-written section removed"
+grep -q "original default: pve73" "$PBT_ROOT/etc/zipl.conf" || fail "original default not recorded"
+expect "sections with the hand-written parameters" 3 "$(grep -c 'kvm.nested=1"$' "$PBT_ROOT/etc/zipl.conf")"
+expect_user_part_kept
+expect_bootable
+# the administrator removes the hand-written section: the first remaining section takes its place
+# as the source of the settings and as the default to go back to
+sed -i '/^\[pve73\]$/,$d' "$PBT_ROOT/etc/zipl.conf"
+pbt refresh
+expect_rc 0 "$pbt_rc"
+expect "default" "proxmox-$P3" "$(default)"
+expect "managed entries" "$P3 $P2" "$(managed)"
+grep -q "original default: debian" "$PBT_ROOT/etc/zipl.conf" || fail "original default not moved to [debian]"
+expect "sections with the hand-written parameters" 0 "$(grep -c 'kvm.nested=1"$' "$PBT_ROOT/etc/zipl.conf")"
+expect_bootable
+FAKE_RUNNING="$P3"
+remove_kernel "$P2"
+expect_rc 0 "$hook_rc"
+expect "managed entries" "$P3" "$(managed)"
+expect_bootable
+
+begin "a hand-written section whose kernel is removed blocks the update, with a warning" hand-default.conf
+add_image "$P2"
+echo "proxmox-kernel-$P2" >> "$PBT_ROOT/packages"
+install_kernel "$P3"
+FAKE_RUNNING="$P3"
+cp "$PBT_ROOT/etc/zipl.conf" "$PBT_ROOT/first"
+remove_kernel "$P2"
+expect_rc 0 "$hook_rc"
+cmp -s "$PBT_ROOT/etc/zipl.conf" "$PBT_ROOT/first" || fail "configuration changed although zipl rejects it"
+grep -q "boots as before" "$PBT_ROOT/hook.out" || fail "no warning"
+
 begin "[defaultboot] without a default line gets one" no-default.conf
 install_kernel "$P1"
 expect_rc 0 "$hook_rc"
