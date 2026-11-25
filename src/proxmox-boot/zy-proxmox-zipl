@@ -14,6 +14,13 @@ if command -V systemd-detect-virt >/dev/null 2>&1 &&
 	exit 0
 fi
 
+# This hook is a conffile: it stays behind when the package is removed without purging it, or is
+# replaced by a version without the zipl backend. It must not fail kernel installations then.
+if [ ! -e /usr/share/proxmox-kernel-helper/scripts/functions ] ||
+	[ ! -e /usr/share/proxmox-kernel-helper/scripts/zipl-functions ]; then
+	exit 0
+fi
+
 . /usr/share/proxmox-kernel-helper/scripts/functions
 . /usr/share/proxmox-kernel-helper/scripts/zipl-functions
 

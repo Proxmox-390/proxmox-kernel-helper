@@ -1,3 +1,12 @@
+proxmox-kernel-helper (9.2.2+s390x3) trixie; urgency=medium
+
+  * zipl backend: the kernel hook exits quietly when its library is
+    missing. The hook is a conffile and stays behind when the package is
+    removed without purge or replaced by an older version; it then
+    failed every kernel installation and removal.
+
+ -- Yvan Janssens <yvanj@cyber.gent>  Wed, 25 Nov 2026 15:58:18 +0100
+
 proxmox-kernel-helper (9.2.2+s390x2) trixie; urgency=medium
 
   * zipl backend: tests for systems where a hand-written section for a

@@ -419,6 +419,17 @@ expect_rc 0 "$pbt_rc"
 grep -q "^proxmox-$P1 \* (managed)\$" "$PBT_ROOT/pbt.out" || fail "default entry not marked"
 grep -q "^debian (manual)\$" "$PBT_ROOT/pbt.out" || fail "manual entry not listed"
 
+begin "the hook does nothing when the rest of the package is gone"
+# conffiles outlive a removal without purge: the hook is still there, its library is not
+sed -e "s#/usr/share/proxmox-kernel-helper/scripts#$PBT_ROOT/nowhere#g" "$src/proxmox-boot/zy-proxmox-zipl" > "$PBT_ROOT/orphan-hook"
+add_image "$P1"
+echo "proxmox-kernel-$P1" >> "$PBT_ROOT/packages"
+rc=0
+sh "$PBT_ROOT/orphan-hook" "$P1" "/boot/vmlinuz-$P1" > "$PBT_ROOT/hook.out" 2>&1 || rc=$?
+expect_rc 0 "$rc"
+expect_untouched
+expect "output" "" "$(cat "$PBT_ROOT/hook.out")"
+
 begin "packages of other kernels do not confuse the list"
 echo "proxmox-kernel-7.3" >> "$PBT_ROOT/packages"
 echo "linux-image-$D612" >> "$PBT_ROOT/packages"
