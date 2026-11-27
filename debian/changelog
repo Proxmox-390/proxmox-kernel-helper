@@ -1,3 +1,14 @@
+proxmox-kernel-helper (9.2.2+s390x4) trixie; urgency=medium
+
+  * zipl backend: 'proxmox-boot-tool refresh --hook zz-proxmox-boot' runs
+    the zipl hook on IBM Z. The initramfs hook of versions without the
+    zipl backend asks for that name; it is a conffile, so a kernel
+    configured during the upgrade before this package still runs it, and
+    the kernel's configuration failed with "'zz-proxmox-boot' is not a
+    valid hook script name".
+
+ -- Yvan Janssens <yvanj@cyber.gent>  Fri, 27 Nov 2026 10:59:55 +0100
+
 proxmox-kernel-helper (9.2.2+s390x3) trixie; urgency=medium
 
   * zipl backend: the kernel hook exits quietly when its library is

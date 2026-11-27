@@ -310,6 +310,13 @@ refresh() {
 		# writes the boot record again
 		hookscripts='proxmox-auto-removal zy-proxmox-zipl'
 		export ZIPL_ALWAYS_RUN=1
+		# the initramfs hook proxmox-boot-sync of versions without the zipl backend asks for
+		# the ESP hook. It is a conffile: an upgrade replaces it only when this package is
+		# configured, so a kernel configured before that still runs the old one (and a locally
+		# changed copy stays for good). Here the hook that updates the boot entries is zipl's.
+		if [ "$hook" = 'zz-proxmox-boot' ]; then
+			hook='zy-proxmox-zipl'
+		fi
 	fi
 
 	if [ -n "$hook" ]; then

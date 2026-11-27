@@ -366,6 +366,19 @@ pbt refresh
 expect_rc 0 "$pbt_rc"
 expect "zipl runs" "$((before + 1))" "$(real_runs)"
 
+begin "the initramfs hook of older versions (ESP hook name) runs the zipl hook"
+# /etc/initramfs/post-update.d/proxmox-boot-sync is a conffile: during an upgrade from a version
+# without the zipl backend a kernel may be configured while the old one, which asks for
+# zz-proxmox-boot, is still in place
+install_kernel "$P1"
+before="$(real_runs)"
+pbt refresh --hook zz-proxmox-boot
+expect_rc 0 "$pbt_rc"
+grep -q "Running hook script 'zy-proxmox-zipl'" "$PBT_ROOT/pbt.out" || fail "zipl hook not run: $(cat "$PBT_ROOT/pbt.out")"
+expect "zipl runs" "$((before + 1))" "$(real_runs)"
+pbt refresh --hook no-such-hook
+expect_rc 1 "$pbt_rc"
+
 begin "next boot through the re-IPL selector (CCW): default untouched"
 mkdir -p "$PBT_ROOT/sys/firmware/reipl/ccw"
 echo ccw > "$PBT_ROOT/sys/firmware/reipl/reipl_type"
